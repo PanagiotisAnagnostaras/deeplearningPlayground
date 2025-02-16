@@ -30,6 +30,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m venv /workspace/.venv && \
-    /workspace/.venv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+    /workspace/.venv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu && \
+    /workspace/.venv/bin/pip install -r requirements.txt
 # Copy source code
 COPY . .
