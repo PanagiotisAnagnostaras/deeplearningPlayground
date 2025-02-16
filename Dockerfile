@@ -31,6 +31,6 @@ RUN apt-get update && \
 
 COPY . .
 
-RUN python3 -m venv /workspace/.venv && \
-    /workspace/.venv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu && \
-    /workspace/.venv/bin/pip install -r requirements.txt
+RUN python3 -m venv /deeplearningPlayground/workspace/.venv && \
+    /deeplearningPlayground/workspace/.venv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu && \
+    /deeplearningPlayground/workspace/.venv/bin/pip install -r requirements.txt
