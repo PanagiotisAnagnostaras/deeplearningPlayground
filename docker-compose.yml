@@ -1,0 +1,13 @@
+version: "3.8"
+services:
+  deeplearning:
+    tty: true
+    image: deeplearning_image
+    container_name: deeplearning_container
+    environment:
+      - "DISPLAY=${DISPLAY}"
+      - "QT_X11_NO_MITSHM=1"
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./workspace/:/workspace/
+    command: ["sleep", "infinity"]   
