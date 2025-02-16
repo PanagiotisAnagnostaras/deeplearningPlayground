@@ -29,8 +29,8 @@ RUN apt-get update && \
     && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+COPY . .
+
 RUN python3 -m venv /workspace/.venv && \
     /workspace/.venv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu && \
     /workspace/.venv/bin/pip install -r requirements.txt
-# Copy source code
-COPY . .
