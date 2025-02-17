@@ -31,8 +31,8 @@ class PPO:
             obs, acts, rews, log_prob = self.rollout()
             advantages, rews2go = self.compute_advantages_and_rews2go(rews=rews, obs=obs)
             for epoch in range(self.n_epochs):
-                self.update_actor(log_prob_before=log_prob, obs=obs)
-                self.update_critic(rews2go)
+                self.update_actor(log_prob_before=log_prob, obs=obs, advantages=advantages)
+                self.update_critic(obs=obs, rews2go=rews2go)
             t_so_far+=1
     
     def rollout(self):
@@ -50,7 +50,7 @@ class PPO:
             obs.append(s)
             rews.append(r)
             log_probs.append(log_prob)
-        return obs, acts, rews, log_prob
+        return torch.stack(obs), torch.stack(acts), torch.stack(rews), torch.stack(log_probs)
         
     def compute_advantages_and_rews2go(self, rews: List[float], obs: List[torch.Tensor]) -> torch.Tensor:
         advantages = []
@@ -63,25 +63,27 @@ class PPO:
             advantages.insert(0, advantage)
             rew2go = rew + self.gamma * (rews2go[0]) if len(rews2go)!=0 else rew
             rews2go.insert(0, rew2go)
-        return advantages
+        return torch.stack(advantages), torch.stack(rews2go)
             
     
     def update_actor(self, log_prob_before, obs, advantages) -> None:
         _, log_prob = self.compute_actions(obs=obs)
-        ratio = torch.exp(log_prob - log_prob_before)
+        ratio = torch.exp(log_prob[:-1] - log_prob_before)
         surr_clipped = torch.clamp(ratio, 1-self.epsilon, 1+self.epsilon) * advantages
         surr_unclipped = ratio * advantages
         actor_loss = torch.min(surr_clipped, surr_unclipped).mean()
         self.actor.zero_grad()
-        actor_loss.backward()
+        actor_loss.backward(retain_graph=True)
         self.actor_opt.step()
+        print(f"actor loss = {actor_loss}")
     
     def update_critic(self, obs, rews2go) -> None:
-        predicted_V = self.read_value_function(obs=obs)
+        predicted_V = self.read_value_function(obs=obs[:-1,:])
         critic_loss = torch.nn.MSELoss()(predicted_V, rews2go)
         self.critic_opt.zero_grad()
-        critic_loss.backward()
+        critic_loss.backward(retain_graph=True)
         self.critic_opt.step()
+        print(f"critic loss = {critic_loss}")
     
     def read_value_function(self, obs: torch.Tensor) -> float:
         return self.critic(obs)
@@ -91,7 +93,7 @@ class PPO:
         dist = MultivariateNormal(mean, self.cov_mat)
         action = dist.sample()
         log_prob = dist.log_prob(action)
-        return action.detach().numpy(), log_prob.detach()
+        return action.detach(), log_prob.detach()
     
     def save(self) -> None:
         pass
