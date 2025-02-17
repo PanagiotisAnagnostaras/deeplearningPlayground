@@ -1,3 +1,4 @@
 class Dimensions:
-    actions_space = 1 # force applied to pendulum
-    observation_space = 4 # pos vel of cart and pendulum
+    def __init__(self, actions_dims, observations_dims) -> None:
+        self.actions_dims = actions_dims
+        self.observations_dims = observations_dims

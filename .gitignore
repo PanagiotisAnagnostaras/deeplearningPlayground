@@ -1,2 +1,3 @@
 .venv/
 data/
+workspace/ppo_from_scratch/__pycache__/

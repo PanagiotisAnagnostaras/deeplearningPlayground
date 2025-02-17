@@ -1,68 +1,97 @@
+import torch.torch_version
 from networks import Actor, Critic
 import torch
+from env import Env
+from typing import List
+from torch.distributions import MultivariateNormal
 
 class PPO:
     def __init__(self, env) -> None:
+        self.env: Env = env
         self._init_hyperparameters()
-        self.env = env
-        self.obs_dim = env.observation_space.shape[0]
-        self.act_dim = env.action_space.shape[0]
-        self.actor = Actor(self.obs_dim, self.act_dim)
-        self.critic = Critic(self.obs_dim)
+        self.actor = Actor(self.env.dimensions.observations_dims, self.env.dimensions.actions_dims)
+        self.actor_opt = torch.optim.SGD(self.actor.parameters(), lr=self.learning_rate)
+        self.critic = Critic(self.env.dimensions.observations_dims)
+        self.critic_opt = torch.optim.SGD(self.critic.parameters(), lr=self.learning_rate)
     
     def _init_hyperparameters(self) -> None:
-        self.timesteps_per_batch = 4800
+        self.timesteps_per_rollout = 10
         self.max_timesteps_per_episode = 1600
         self.gamma = 0.95
-        
-    def learn(self, total_timesteps):
+        self.lambd = 0.5
+        self.n_epochs = 10
+        self.epsilon = 0.2
+        self.learning_rate = 1e-3
+        cov_var = torch.full(size=(self.env.dimensions.actions_dims,), fill_value=0.5)
+        self.cov_mat = torch.diag(cov_var)
+
+    def train(self, total_timesteps):
         t_so_far = 0
         while t_so_far<total_timesteps:
-            batch_obs, batch_acts, batch_log_probs, batch_rtgs, batch_lens = self.rollout()
+            obs, acts, rews, log_prob = self.rollout()
+            advantages, rews2go = self.compute_advantages_and_rews2go(rews=rews, obs=obs)
+            for epoch in range(self.n_epochs):
+                self.update_actor(log_prob_before=log_prob, obs=obs)
+                self.update_critic(rews2go)
             t_so_far+=1
     
     def rollout(self):
-        batch_obs = []
-        batch_acts = []
-        batch_log_probs = []
-        batch_rews = []
-        batch_rtgs = []
-        batch_lens = []
-
-        t = 0
-        while t < self.timesteps_per_batch:
-            ep_rews = []
-            obs = self.env.reset()
-            done = False
-            for ep_t in range (self.max_timesteps_per_episode):
-                t += 1
-                batch_obs.append(obs)
-                action, log_prob = self.get_action(obs)
-                obs, rew, done, _ = self.env.step(action)
-                ep_rews.append(rew)
-                batch_acts.append(action)
-                batch_log_probs.append(log_prob)
-                if done:
-                    break
-            batch_lens.append(ep_t + 1)
-            batch_rews.append(ep_rews)
-        batch_obs = torch.tensor(batch_obs, dtype=torch.float)
-        batch_acts = torch.tensor(batch_acts, dtype=torch.float)
-        batch_log_probs = torch.tensor(batch_log_probs, dtype=torch.float)
-        batch_rtgs = self.compute_rtgs(batch_rews)
-        return batch_obs, batch_acts, batch_log_probs, batch_rtgs, batch_lens
-
-    def compute_rtgs(self, batch_rews):
-        # The rewards-to-go (rtg) per episode per batch to return.
-        # The shape will be (num timesteps per episode)
-        batch_rtgs = []
-        # Iterate through each episode backwards to maintain same order
-        # in batch_rtgs
-        for ep_rews in reversed(batch_rews):
-            discounted_reward = 0 # The discounted reward so far
-            for rew in reversed(ep_rews):
-                discounted_reward = rew + discounted_reward * self.gamma
-                batch_rtgs.insert(0, discounted_reward)
-        # Convert the rewards-to-go into a tensor
-        batch_rtgs = torch.tensor(batch_rtgs, dtype=torch.float)
-        return batch_rtgs
+        obs = []
+        acts = []
+        rews = []
+        log_probs = []
+        s = self.env.get_observations()
+        obs.append(s)
+        for t in range(self.timesteps_per_rollout):
+            a, log_prob = self.compute_actions(s)
+            s = self.env.step(a)
+            r = self.env.get_reward(s, a)
+            acts.append(a)
+            obs.append(s)
+            rews.append(r)
+            log_probs.append(log_prob)
+        return obs, acts, rews, log_prob
+        
+    def compute_advantages_and_rews2go(self, rews: List[float], obs: List[torch.Tensor]) -> torch.Tensor:
+        advantages = []
+        rews2go = []
+        for rew_id, rew in reversed(list(enumerate(rews))):
+            next_observation = obs[rew_id+1]
+            observation = obs[rew_id]
+            delta = rew + self.gamma * self.read_value_function(observation) - self.read_value_function(next_observation)
+            advantage = delta + (self.gamma * self.lambd) * advantages[0] if len(advantages)!=0 else delta
+            advantages.insert(0, advantage)
+            rew2go = rew + self.gamma * (rews2go[0]) if len(rews2go)!=0 else rew
+            rews2go.insert(0, rew2go)
+        return advantages
+            
+    
+    def update_actor(self, log_prob_before, obs, advantages) -> None:
+        _, log_prob = self.compute_actions(obs=obs)
+        ratio = torch.exp(log_prob - log_prob_before)
+        surr_clipped = torch.clamp(ratio, 1-self.epsilon, 1+self.epsilon) * advantages
+        surr_unclipped = ratio * advantages
+        actor_loss = torch.min(surr_clipped, surr_unclipped).mean()
+        self.actor.zero_grad()
+        actor_loss.backward()
+        self.actor_opt.step()
+    
+    def update_critic(self, obs, rews2go) -> None:
+        predicted_V = self.read_value_function(obs=obs)
+        critic_loss = torch.nn.MSELoss()(predicted_V, rews2go)
+        self.critic_opt.zero_grad()
+        critic_loss.backward()
+        self.critic_opt.step()
+    
+    def read_value_function(self, obs: torch.Tensor) -> float:
+        return self.critic(obs)
+    
+    def compute_actions(self, obs: torch.Tensor) -> torch.Tensor:
+        mean = self.actor(obs)
+        dist = MultivariateNormal(mean, self.cov_mat)
+        action = dist.sample()
+        log_prob = dist.log_prob(action)
+        return action.detach().numpy(), log_prob.detach()
+    
+    def save(self) -> None:
+        pass
