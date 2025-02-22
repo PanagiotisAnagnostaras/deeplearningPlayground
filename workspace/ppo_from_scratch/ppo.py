@@ -13,7 +13,6 @@ class PPO:
         self.actor_opt = torch.optim.SGD(self.actor.parameters(), lr=self.learning_rate)
         self.critic = Critic(self.env.dimensions.observations_dims)
         self.critic_opt = torch.optim.SGD(self.critic.parameters(), lr=self.learning_rate)
-        torch.autograd.set_detect_anomaly(True)
 
     
     def _init_hyperparameters(self) -> None:
@@ -33,9 +32,9 @@ class PPO:
             obs, acts, rews, log_prob = self.rollout()
             advantages, rews2go = self.compute_advantages_and_rews2go(rews=rews, obs=obs)
             for epoch in range(self.n_epochs):
-                print(f"log_prob._version = {log_prob._version}, obs._version = {obs._version}, advantages._version = {advantages._version}, rews2go._version = {rews2go._version}")
-                self.update_actor(log_prob_before=log_prob, obs=obs, advantages=advantages)
-                self.update_critic(obs=obs, rews2go=rews2go)
+                actor_loss = self.update_actor(log_prob_before=log_prob, obs=obs, advantages=advantages)
+                critic_loss = self.update_critic(obs=obs, rews2go=rews2go)
+                print(f"actor loss = {actor_loss} critic loss = {critic_loss}")
             step+=1
     
     def rollout(self):
@@ -73,20 +72,20 @@ class PPO:
         _, log_prob = self.compute_actions(obs=obs[:-1,:])
         ratio = torch.exp(log_prob - log_prob_before.detach())
         surr_clipped = torch.clamp(ratio, 1-self.epsilon, 1+self.epsilon) * advantages.detach()
-        surr_unclipped = ratio * advantages
+        surr_unclipped = ratio * advantages.detach()
         actor_loss = torch.min(surr_clipped, surr_unclipped).mean()
         self.actor_opt.zero_grad()
         actor_loss.backward()
         self.actor_opt.step()
-        print(f"actor loss = {actor_loss}")
+        return actor_loss.item()
     
     def update_critic(self, obs: torch.Tensor, rews2go: torch.Tensor) -> None:
         predicted_V = self.read_value_function(obs=obs[:-1,:])
-        critic_loss = torch.nn.MSELoss()(predicted_V, rews2go.detach())
+        critic_loss: torch.Tensor = torch.nn.MSELoss()(predicted_V, rews2go.detach())
         self.critic_opt.zero_grad()
         critic_loss.backward()
         self.critic_opt.step()
-        print(f"critic loss = {critic_loss}")
+        return critic_loss.item()
     
     def read_value_function(self, obs: torch.Tensor) -> float:
         return self.critic(obs)
